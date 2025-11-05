@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DesignResult } from '../services/geminiService';
 import Spinner from './Spinner';
 
@@ -31,7 +31,32 @@ const Sidebar: React.FC<SidebarProps> = ({
     editedImageUrl
 }) => {
     const [editPrompt, setEditPrompt] = useState('');
+    const [mapQuery, setMapQuery] = useState('');
+    const [selectedStore, setSelectedStore] = useState<any>(null);
     const activeDesign = designs[activeDesignIndex];
+
+    const storeChunks = groundingMetadata?.groundingChunks?.filter((chunk: any) => chunk.maps?.uri && chunk.maps?.title) || [];
+
+    useEffect(() => {
+        // Set initial map view to the first store when metadata is available
+        if (storeChunks.length > 0) {
+            const firstStore = storeChunks[0];
+            setSelectedStore(firstStore);
+            const query = encodeURIComponent(firstStore.maps.title);
+            setMapQuery(`https://www.google.com/maps/embed/v1/place?key=${process.env.API_KEY}&q=${query}`);
+        } else {
+            // Clear map if no stores
+            setMapQuery('');
+            setSelectedStore(null);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [groundingMetadata]); 
+
+    const handleStoreClick = (store: any) => {
+        setSelectedStore(store);
+        const query = encodeURIComponent(store.maps.title);
+        setMapQuery(`https://www.google.com/maps/embed/v1/place?key=${process.env.API_KEY}&q=${query}`);
+    };
 
     const handleSubmitEdit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -97,28 +122,50 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
 
                 {/* Local Stores */}
-                {groundingMetadata?.groundingChunks && groundingMetadata.groundingChunks.length > 0 && (
+                {storeChunks.length > 0 && (
                     <div>
-                        <h3 className="font-semibold text-lg mb-2 text-white">Shop The Look Nearby</h3>
+                        <h3 className="font-semibold text-lg mb-4 text-white">Shop The Look Nearby</h3>
+                        
+                        {mapQuery && (
+                            <div className="aspect-w-16 aspect-h-9 w-full rounded-md overflow-hidden border border-white/10 mb-4">
+                                <iframe
+                                    key={mapQuery}
+                                    width="100%"
+                                    height="100%"
+                                    style={{ border: 0 }}
+                                    loading="lazy"
+                                    allowFullScreen
+                                    referrerPolicy="no-referrer-when-downgrade"
+                                    src={mapQuery}>
+                                </iframe>
+                            </div>
+                        )}
+                        
                         <ul className="space-y-2">
-                            {groundingMetadata.groundingChunks
-                                .filter((chunk: any) => chunk.maps?.uri && chunk.maps?.title)
-                                .map((chunk: any, index: number) => (
-                                    <li key={index} className="text-sm">
-                                        <a 
-                                            href={chunk.maps.uri}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="flex items-center gap-2 p-2 rounded-md bg-brand-dark hover:bg-white/5 transition-colors group"
-                                        >
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-brand-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                                            </svg>
-                                            <span className="text-brand-text-secondary group-hover:text-brand-accent">{chunk.maps.title}</span>
-                                        </a>
-                                    </li>
-                                ))}
+                            {storeChunks.map((chunk: any, index: number) => (
+                                <li key={index}>
+                                    <button
+                                        onClick={() => handleStoreClick(chunk)}
+                                        className={`w-full flex items-center gap-3 p-2 rounded-md transition-colors group text-left ${
+                                            selectedStore?.maps?.uri === chunk.maps?.uri
+                                                ? 'bg-brand-accent/20'
+                                                : 'bg-brand-dark hover:bg-white/5'
+                                        }`}
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-brand-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                        <span className={`text-sm ${
+                                            selectedStore?.maps?.uri === chunk.maps?.uri
+                                                ? 'text-brand-accent font-semibold'
+                                                : 'text-brand-text-secondary group-hover:text-brand-accent'
+                                        }`}>
+                                            {chunk.maps.title}
+                                        </span>
+                                    </button>
+                                </li>
+                            ))}
                         </ul>
                     </div>
                 )}

@@ -3,307 +3,178 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-
-import { GoogleGenAI, GenerateContentResponse, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Modality, Type } from '@google/genai';
 import { LocationState } from '../types';
 
+// Fix: Initialize the GoogleGenAI client.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
 
+/**
+ * The result of a design concept generation.
+ */
 export interface DesignResult {
     designTitle: string;
-    redesignedImageUrl: string;
     designDescription: string;
+    redesignedImageUrl: string;
 }
 
-// Helper to get intrinsic image dimensions from a File object
-const getImageDimensions = (file: File): Promise<{ width: number; height: number }> => {
-    return new Promise((resolve, reject) => {
+/**
+ * Converts a File object to a GoogleGenAI.Part object.
+ * @param file The file to convert.
+ * @returns A promise that resolves to a Part object.
+ */
+const fileToGenerativePart = async (file: File) => {
+    const base64EncodedDataPromise = new Promise<string>((resolve) => {
         const reader = new FileReader();
+        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
         reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            if (!event.target?.result) {
-                return reject(new Error("Failed to read file."));
-            }
-            const img = new Image();
-            img.src = event.target.result as string;
-            img.onload = () => {
-                resolve({ width: img.naturalWidth, height: img.naturalHeight });
-            };
-            img.onerror = (err) => reject(new Error(`Image load error: ${err}`));
-        };
-        reader.onerror = (err) => reject(new Error(`File reader error: ${err}`));
     });
+    return {
+        inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
+    };
 };
 
-// Helper to crop a square image back to an original aspect ratio, removing padding.
-const cropToOriginalAspectRatio = (
-    imageDataUrl: string,
-    originalWidth: number,
-    originalHeight: number,
-    targetDimension: number
-): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.src = imageDataUrl;
-        img.onload = () => {
-            const aspectRatio = originalWidth / originalHeight;
-            let contentWidth, contentHeight;
-            if (aspectRatio > 1) { // Landscape
-                contentWidth = targetDimension;
-                contentHeight = targetDimension / aspectRatio;
-            } else { // Portrait or square
-                contentHeight = targetDimension;
-                contentWidth = targetDimension * aspectRatio;
-            }
-            const x = (targetDimension - contentWidth) / 2;
-            const y = (targetDimension - contentHeight) / 2;
-            const canvas = document.createElement('canvas');
-            canvas.width = contentWidth;
-            canvas.height = contentHeight;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return reject(new Error('Could not get canvas context for cropping.'));
-            ctx.drawImage(img, x, y, contentWidth, contentHeight, 0, 0, contentWidth, contentHeight);
-            resolve(canvas.toDataURL('image/jpeg', 0.95));
-        };
-        img.onerror = (err) => reject(new Error(`Image load error during cropping: ${err}`));
-    });
+/**
+ * Converts a data URL string to a GoogleGenAI.Part object.
+ * @param dataUrl The data URL to convert.
+ * @returns A Part object.
+ */
+const dataUrlToGenerativePart = (dataUrl: string) => {
+    const [header, data] = dataUrl.split(',');
+    const mimeType = header.match(/:(.*?);/)?.[1] || 'image/png';
+    return {
+        inlineData: { data, mimeType },
+    };
 };
 
-// Resizes the image to fit within a square and adds padding.
-const resizeImage = (file: File, targetDimension: number): Promise<File> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            if (!event.target?.result) return reject(new Error("Failed to read file."));
-            const img = new Image();
-            img.src = event.target.result as string;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = targetDimension;
-                canvas.height = targetDimension;
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return reject(new Error('Could not get canvas context.'));
-                ctx.fillStyle = 'black';
-                ctx.fillRect(0, 0, targetDimension, targetDimension);
-                const aspectRatio = img.width / img.height;
-                let newWidth, newHeight;
-                if (aspectRatio > 1) {
-                    newWidth = targetDimension;
-                    newHeight = targetDimension / aspectRatio;
-                } else {
-                    newHeight = targetDimension;
-                    newWidth = targetDimension * aspectRatio;
+/**
+ * Generates two design concepts for a given room image, including descriptions,
+ * redesigned images, and local store suggestions.
+ * @param imageFile The user's uploaded room image.
+ * @param location The user's location for grounding.
+ * @returns An object containing the design results and grounding metadata.
+ */
+export const generateDesignConcept = async (imageFile: File, location: LocationState) => {
+    // Step 1: Generate design descriptions and find local stores using a text model.
+    const textModel = 'gemini-2.5-pro';
+    const imagePart = await fileToGenerativePart(imageFile);
+
+    const systemInstruction = `You are an expert interior designer. Your goal is to provide two distinct, creative, and appealing redesign concepts for a given room image. For each concept, you must provide a unique title and a detailed description. The two design styles to generate are 'Modern Minimalist' and 'Cozy Bohemian'. The user will provide their location to help you suggest local stores. You must use this information to ground your response in local search results for furniture and decor stores. You MUST return the response as a single, raw JSON object (no markdown, no surrounding text) matching this schema: { "designs": [{ "designTitle": "string", "designDescription": "string" }, { "designTitle": "string", "designDescription": "string" }] }`;
+
+    const contentParts = [
+        imagePart,
+        { text: "Analyze this room and provide two redesign concepts as instructed." },
+    ];
+    if (location && location.type === 'query') {
+        contentParts.push({ text: `User location query: "${location.value}"` });
+    }
+
+    const textGenerationConfig: any = {
+        tools: [{ googleMaps: {} }],
+    };
+
+    if (location && location.type === 'coords') {
+        textGenerationConfig.toolConfig = {
+            retrievalConfig: {
+                latLng: {
+                    latitude: location.value.latitude,
+                    longitude: location.value.longitude,
                 }
-                const x = (targetDimension - newWidth) / 2;
-                const y = (targetDimension - newHeight) / 2;
-                ctx.drawImage(img, x, y, newWidth, newHeight);
-                canvas.toBlob((blob) => {
-                    if (blob) {
-                        resolve(new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() }));
-                    } else {
-                        reject(new Error('Canvas to Blob conversion failed.'));
-                    }
-                }, 'image/jpeg', 0.95);
-            };
-            img.onerror = (err) => reject(new Error(`Image load error: ${err}`));
+            }
         };
-        reader.onerror = (err) => reject(new Error(`File reader error: ${err}`));
-    });
-};
-
-// Helper function to convert a File object to a Gemini API Part
-const fileToPart = async (file: File): Promise<{ inlineData: { mimeType: string; data: string; } }> => {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = error => reject(error);
-    });
-    const arr = dataUrl.split(',');
-    if (arr.length < 2) throw new Error("Invalid data URL");
-    const mimeMatch = arr[0].match(/:(.*?);/);
-    if (!mimeMatch || !mimeMatch[1]) throw new Error("Could not parse MIME type from data URL");
-    const mimeType = mimeMatch[1];
-    const data = arr[1];
-    return { inlineData: { mimeType, data } };
-};
-
-// Helper function to convert a data URL string to a Gemini API Part
-const dataUrlToPart = (dataUrl: string): { inlineData: { mimeType: string; data: string; } } => {
-    const arr = dataUrl.split(',');
-    if (arr.length < 2) throw new Error("Invalid data URL");
-    const mimeMatch = arr[0].match(/:(.*?);/);
-    if (!mimeMatch || !mimeMatch[1]) throw new Error("Could not parse MIME type from data URL");
-    const mimeType = mimeMatch[1];
-    const data = arr[1];
-    return { inlineData: { mimeType, data } };
-};
-
-export const editImageWithPrompt = async (
-    imageUrl: string,
-    prompt: string
-): Promise<string> => {
-    console.log(`Editing image with prompt: "${prompt}"`);
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-    const imagePart = dataUrlToPart(imageUrl);
-    const textPart = { text: prompt };
-
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: { parts: [imagePart, textPart] },
-        config: { responseModalities: [Modality.IMAGE] },
-    });
-
-    const imagePartFromResponse = response.candidates?.[0]?.content?.parts?.find(part => part.inlineData);
-
-    if (!imagePartFromResponse?.inlineData) {
-        console.error("Model response for image edit did not contain an image part.", response);
-        throw new Error("The AI model did not return an edited image. Please try a different prompt.");
-    }
-
-    const { mimeType, data } = imagePartFromResponse.inlineData;
-    const newImageUrl = `data:${mimeType};base64,${data}`;
-    console.log("Image editing successful.");
-    return newImageUrl;
-};
-
-
-export const generateDesignConcept = async (
-    roomImage: File,
-    location: LocationState
-): Promise<{ designs: DesignResult[]; groundingMetadata: any; }> => {
-    console.log('Starting two-step design generation process...');
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-    const { width: originalWidth, height: originalHeight } = await getImageDimensions(roomImage);
-    const MAX_DIMENSION = 1024;
-    
-    console.log('Resizing room image...');
-    const resizedRoomImage = await resizeImage(roomImage, MAX_DIMENSION);
-    const roomImagePart = await fileToPart(resizedRoomImage);
-
-    console.log('Generating two design plans with gemini-2.5-pro...');
-    
-    let designPlannerPrompt = `
-You are an expert interior designer specializing in practical, budget-friendly transformations that require no structural work.
-A user has uploaded an image of their room.
-Your goal is to generate TWO distinct design concepts.
-
-**Constraints for ALL designs:**
-- All suggestions must be achievable without a carpenter or major renovations. Focus on paint, furniture arrangement, new decor, and textiles.
-- Prioritize reusing and repurposing the user's existing furniture.
-- New items suggested should be common, affordable types of products.
-- Use the Google Maps tool to find 3-5 local stores (like home goods, department, or furniture stores) near the user's location where these types of items could be purchased.
-`;
-
-    const config: any = { tools: [{googleMaps: {}}] };
-    let toolConfig: any = {};
-
-    if (location?.type === 'coords') {
-        toolConfig = { retrievalConfig: { latLng: location.value } };
-    } else if (location?.type === 'query') {
-        designPlannerPrompt += `\nThe user's location is specified as: "${location.value}". Ground your search for local stores based on this address.`;
-    }
-
-    designPlannerPrompt += `
-**Design Concept 1: "Elegant Refresh"**
-- This design should HEAVILY rely on the existing furniture.
-- Suggest simple modifications like repainting a table, changing handles, adding a slipcover, or rearranging the layout.
-- Introduce 1-2 key new decor items (e.g., a new rug, art, modern lighting) to elevate the space.
-
-**Design Concept 2: "Cozy Minimalist"**
-- This design can propose replacing one major furniture piece if it significantly improves the room, but only if necessary.
-- The aesthetic should be clean, uncluttered, warm, and inviting.
-- Focus on textures (knit blankets, linen curtains), natural materials, and a calming color palette.
-
-**Your Task:**
-Your response MUST be a single valid JSON object. The root object should have one key: "designs".
-The value of "designs" should be an array of exactly TWO objects. Each object must have these keys:
-- "designTitle": A string (e.g., "Elegant Refresh").
-- "designDescription": A detailed description for this concept.
-- "imagePrompt": A specific prompt for the image model for this concept.
-
-Example JSON structure:
-{
-  "designs": [
-    {
-      "designTitle": "Elegant Refresh",
-      "designDescription": "We'll start by rearranging your current sofa...",
-      "imagePrompt": "A photo of a living room with the sofa facing the window. The existing coffee table is painted matte black..."
-    },
-    {
-      "designTitle": "Cozy Minimalist",
-      "designDescription": "To create a more serene space, we'll declutter...",
-      "imagePrompt": "A photorealistic image of a minimalist living room with light oak floors. A chunky knit throw blanket is on the armchair."
-    }
-  ]
-}
-`;
-
-    const plannerResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-pro',
-        contents: { parts: [{ text: designPlannerPrompt }, roomImagePart] },
-        config,
-        toolConfig: Object.keys(toolConfig).length > 0 ? toolConfig : undefined,
-    });
-
-    const groundingMetadata = plannerResponse.candidates?.[0]?.groundingMetadata;
-    console.log('Received design plan:', plannerResponse.text);
-    console.log('Grounding metadata:', groundingMetadata);
-
-    let parsedResponse;
-    try {
-        const textResponse = plannerResponse.text.trim();
-        const startIndex = textResponse.indexOf('{');
-        const endIndex = textResponse.lastIndexOf('}');
-        if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-            throw new Error("No valid JSON object found in the response.");
-        }
-        const jsonString = textResponse.substring(startIndex, endIndex + 1);
-        parsedResponse = JSON.parse(jsonString);
-    } catch(e) {
-        console.error("Failed to parse JSON from planner model. Raw response:", plannerResponse.text, "Error:", e);
-        throw new Error("The AI failed to return a valid design plan. Please try again.");
     }
     
-    if (!parsedResponse.designs || parsedResponse.designs.length !== 2) {
-        throw new Error("The AI's design plan was incomplete or malformed.");
-    }
+    const textResponse = await ai.models.generateContent({
+        model: textModel,
+        contents: { parts: contentParts },
+        config: textGenerationConfig,
+        systemInstruction,
+    });
 
-    console.log('Generating two redesigned images in parallel...');
-    const imageGenerationPromises = parsedResponse.designs.map((design: any) => {
-        return ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: { parts: [roomImagePart, { text: `Based on the original room image, generate a new, photorealistic image following this design prompt: ${design.imagePrompt}` }] },
-            config: { responseModalities: [Modality.IMAGE] },
+    const groundingMetadata = textResponse.candidates?.[0]?.groundingMetadata;
+    
+    // Robust JSON parsing
+    let jsonString = textResponse.text.trim();
+    const jsonStartIndex = jsonString.indexOf('{');
+    const jsonEndIndex = jsonString.lastIndexOf('}');
+
+    if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
+        jsonString = jsonString.substring(jsonStartIndex, jsonEndIndex + 1);
+    } else {
+        throw new Error("Could not find a valid JSON object in the model's response.");
+    }
+    
+    const resultJson = JSON.parse(jsonString);
+    const textDesigns: { designTitle: string, designDescription: string }[] = resultJson.designs;
+
+    // Step 2: Generate images for each design concept using an image model.
+    const imageModel = 'gemini-2.5-flash-image';
+    const designs: DesignResult[] = [];
+
+    for (const textDesign of textDesigns) {
+        const imagePrompt = `Generate a photorealistic image of the provided room, but redesigned in a '${textDesign.designTitle}' style. The new design should incorporate these elements: ${textDesign.designDescription}`;
+        
+        const imageResponse = await ai.models.generateContent({
+            model: imageModel,
+            contents: {
+                parts: [
+                    imagePart,
+                    { text: imagePrompt }
+                ]
+            },
+            config: {
+                responseModalities: [Modality.IMAGE],
+            }
         });
-    });
 
-    const imageGenResponses = await Promise.all(imageGenerationPromises);
-    console.log('Received all image generation responses.');
-
-    const finalDesigns = await Promise.all(parsedResponse.designs.map(async (design: any, index: number) => {
-        const imageGenResponse = imageGenResponses[index];
-        const imagePartFromResponse = imageGenResponse.candidates?.[0]?.content?.parts?.find(part => part.inlineData);
-
-        if (!imagePartFromResponse?.inlineData) {
-            console.error(`Model response for design ${index + 1} did not contain an image part.`, imageGenResponse);
-            throw new Error(`The AI model did not return a redesigned image for "${design.designTitle}". Please try again.`);
+        let redesignedImageUrl = '';
+        const part = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        if (part?.inlineData) {
+            const base64ImageBytes: string = part.inlineData.data;
+            redesignedImageUrl = `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
         }
         
-        const { mimeType, data } = imagePartFromResponse.inlineData;
-        const generatedSquareImageUrl = `data:${mimeType};base64,${data}`;
+        if (redesignedImageUrl) {
+            designs.push({
+                ...textDesign,
+                redesignedImageUrl,
+            });
+        } else {
+            console.warn(`Image generation failed for design: ${textDesign.designTitle}`);
+        }
+    }
+    
+    return { designs, groundingMetadata };
+};
 
-        const finalImageUrl = await cropToOriginalAspectRatio(generatedSquareImageUrl, originalWidth, originalHeight, MAX_DIMENSION);
+/**
+ * Edits an image based on a text prompt.
+ * @param baseImageUrl The data URL of the image to edit.
+ * @param prompt The editing instruction.
+ * @returns A promise that resolves to the data URL of the edited image.
+ */
+export const editImageWithPrompt = async (baseImageUrl: string, prompt: string): Promise<string> => {
+    const imageModel = 'gemini-2.5-flash-image';
+    const imagePart = dataUrlToGenerativePart(baseImageUrl);
+    
+    const response = await ai.models.generateContent({
+        model: imageModel,
+        contents: {
+            parts: [
+                imagePart,
+                { text: prompt },
+            ]
+        },
+        config: {
+            responseModalities: [Modality.IMAGE],
+        }
+    });
 
-        return {
-            designTitle: design.designTitle,
-            redesignedImageUrl: finalImageUrl,
-            designDescription: design.designDescription,
-        };
-    }));
+    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+    if (part?.inlineData) {
+        const base64ImageBytes: string = part.inlineData.data;
+        return `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
+    }
 
-    return {
-        designs: finalDesigns,
-        groundingMetadata,
-    };
+    throw new Error("Failed to generate edited image.");
 };
