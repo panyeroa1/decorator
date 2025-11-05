@@ -59,7 +59,19 @@ export const generateDesignConcept = async (imageFile: File, location: LocationS
     const textModel = 'gemini-2.5-pro';
     const imagePart = await fileToGenerativePart(imageFile);
 
-    const systemInstruction = `You are an expert interior designer. Your goal is to provide two distinct, creative, and appealing redesign concepts for a given room image. For each concept, you must provide a unique title and a detailed description. The two design styles to generate are 'Modern Minimalist' and 'Cozy Bohemian'. The user will provide their location to help you suggest local stores. You must use this information to ground your response in local search results for furniture and decor stores. You MUST return the response as a single, raw JSON object (no markdown, no surrounding text) matching this schema: { "designs": [{ "designTitle": "string", "designDescription": "string" }, { "designTitle": "string", "designDescription": "string" }] }`;
+    const systemInstruction = `You are an expert interior designer. Your goal is to provide two distinct, creative, and appealing redesign concepts for a given room image. The two design styles to generate are 'Modern Minimalist' and 'Cozy Bohemian'. You MUST format your response using the following specific markdown headers and nothing else:
+
+##T1##
+[Title for Design 1]
+
+##D1##
+[Description for Design 1]
+
+##T2##
+[Title for Design 2]
+
+##D2##
+[Description for Design 2]`;
 
     const contentParts = [
         imagePart,
@@ -84,28 +96,39 @@ export const generateDesignConcept = async (imageFile: File, location: LocationS
         };
     }
     
+    // Fix: `systemInstruction` must be passed within the `config` object.
     const textResponse = await ai.models.generateContent({
         model: textModel,
         contents: { parts: contentParts },
-        config: textGenerationConfig,
-        systemInstruction,
+        config: { ...textGenerationConfig, systemInstruction },
     });
 
     const groundingMetadata = textResponse.candidates?.[0]?.groundingMetadata;
     
-    // Robust JSON parsing
-    let jsonString = textResponse.text.trim();
-    const jsonStartIndex = jsonString.indexOf('{');
-    const jsonEndIndex = jsonString.lastIndexOf('}');
+    const parseResponse = (text: string): { designTitle: string, designDescription: string }[] => {
+        const title1Match = text.match(/##T1##\s*([\s\S]*?)\s*##D1##/);
+        const desc1Match = text.match(/##D1##\s*([\s\S]*?)\s*##T2##/);
+        const title2Match = text.match(/##T2##\s*([\s\S]*?)\s*##D2##/);
+        const desc2Match = text.match(/##D2##\s*([\s\S]*)/);
 
-    if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
-        jsonString = jsonString.substring(jsonStartIndex, jsonEndIndex + 1);
-    } else {
-        throw new Error("Could not find a valid JSON object in the model's response.");
-    }
+        const title1 = title1Match ? title1Match[1].trim() : '';
+        const desc1 = desc1Match ? desc1Match[1].trim() : '';
+        const title2 = title2Match ? title2Match[1].trim() : '';
+        const desc2 = desc2Match ? desc2Match[1].trim() : '';
+
+        if (!title1 || !desc1 || !title2 || !desc2) {
+            console.error("Failed to parse response:", text);
+            throw new Error("Could not parse the design concepts from the model's response. The format was unexpected.");
+        }
+
+        return [
+            { designTitle: title1, designDescription: desc1 },
+            { designTitle: title2, designDescription: desc2 },
+        ];
+    };
     
-    const resultJson = JSON.parse(jsonString);
-    const textDesigns: { designTitle: string, designDescription: string }[] = resultJson.designs;
+    const textDesigns = parseResponse(textResponse.text);
+
 
     // Step 2: Generate images for each design concept using an image model.
     const imageModel = 'gemini-2.5-flash-image';
