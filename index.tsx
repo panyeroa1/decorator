@@ -5,6 +5,7 @@
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+// Fix: Correctly import the App component. The path is correct, the error stems from App.tsx being an invalid module previously.
 import App from './App';
 
 const rootElement = document.getElementById('root');
