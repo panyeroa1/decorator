@@ -27,7 +27,7 @@ const ResultsView: React.FC<ResultsViewProps> = ({ originalImageUrl, designs, ed
             <div className="w-full max-w-5xl mx-auto space-y-6">
                 {/* Original Image */}
                 <div className="relative group">
-                     <div className="aspect-w-16 aspect-h-9 w-full bg-black rounded-lg overflow-hidden shadow-lg border border-transparent group-hover:border-brand-accent/50 transition-all">
+                     <div className="aspect-[16/9] w-full bg-black rounded-lg overflow-hidden shadow-lg border border-transparent group-hover:border-brand-accent/50 transition-all">
                         <img
                             src={originalImageUrl}
                             alt="Original Room"
@@ -43,7 +43,7 @@ const ResultsView: React.FC<ResultsViewProps> = ({ originalImageUrl, designs, ed
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {designs.map((design, index) => (
                         <div key={design.designTitle} className="relative group cursor-pointer" onClick={() => onImageClick(getImageForDesign(index))}>
-                           <div className="aspect-w-16 aspect-h-9 w-full bg-black rounded-lg overflow-hidden shadow-lg transition-all border border-transparent group-hover:border-brand-accent duration-300">
+                           <div className="aspect-[16/9] w-full bg-black rounded-lg overflow-hidden shadow-lg transition-all border border-transparent group-hover:border-brand-accent duration-300">
                                 <img
                                     src={getImageForDesign(index)}
                                     alt={design.designTitle}

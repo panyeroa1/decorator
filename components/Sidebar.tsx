@@ -165,7 +165,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                         
                         {mapQuery && (
-                            <div className="aspect-w-16 aspect-h-9 w-full rounded-md overflow-hidden border border-white/10 mb-4">
+                            <div className="aspect-[16/9] w-full rounded-md overflow-hidden border border-white/10 mb-4">
                                 <iframe
                                     key={mapQuery}
                                     width="100%"

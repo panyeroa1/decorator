@@ -1,4 +1,8 @@
 {
-  "name": "AI Interior Designer",
-  "description": "Upload a photo of your room and get a new, elegant, and affordable design concept with product suggestions from local stores."
+  "name": "Virtual Staging AI",
+  "description": "Upload a photo of your room and get instant redesign concepts.",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone"
+  ]
 }
