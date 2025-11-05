@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { DesignResult } from '../services/geminiService';
 import Spinner from './Spinner';
 
@@ -19,6 +19,15 @@ interface SidebarProps {
     editedImageUrl: string | null;
 }
 
+// Heuristic to categorize stores based on their name
+const getStoreCategory = (title: string): string => {
+    const lower = title.toLowerCase();
+    if (lower.includes('furniture')) return 'Furniture';
+    if (lower.includes('decor') || lower.includes('home goods') || lower.includes('pottery') || lower.includes('crate') || lower.includes('barn') || lower.includes('world market')) return 'Home Decor';
+    if (lower.includes('department') || lower.includes('target') || lower.includes('walmart') || lower.includes('kohls')) return 'Department Store';
+    return 'General';
+};
+
 const Sidebar: React.FC<SidebarProps> = ({ 
     designs, 
     activeDesignIndex, 
@@ -33,30 +42,43 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [editPrompt, setEditPrompt] = useState('');
     const [mapQuery, setMapQuery] = useState('');
     const [selectedStore, setSelectedStore] = useState<any>(null);
+    const [activeFilter, setActiveFilter] = useState('All');
+    
     const activeDesign = designs[activeDesignIndex];
+    const storeChunks = useMemo(() => groundingMetadata?.groundingChunks?.filter((chunk: any) => chunk.maps?.uri && chunk.maps?.title) || [], [groundingMetadata]);
 
-    const storeChunks = groundingMetadata?.groundingChunks?.filter((chunk: any) => chunk.maps?.uri && chunk.maps?.title) || [];
+    const availableCategories = useMemo(() => {
+        const categories = new Set<string>(['All']);
+        storeChunks.forEach((store: any) => {
+            categories.add(getStoreCategory(store.maps.title));
+        });
+        return Array.from(categories);
+    }, [storeChunks]);
+
+    const filteredStores = useMemo(() => {
+        if (activeFilter === 'All') {
+            return storeChunks;
+        }
+        return storeChunks.filter((store: any) => getStoreCategory(store.maps.title) === activeFilter);
+    }, [storeChunks, activeFilter]);
+
+    const handleStoreClick = (store: any) => {
+        setSelectedStore(store);
+        const query = encodeURIComponent(`${store.maps.title}, ${store.maps.subtitle || ''}`);
+        setMapQuery(`https://www.google.com/maps/embed/v1/place?key=${process.env.API_KEY}&q=${query}`);
+    };
 
     useEffect(() => {
-        // Set initial map view to the first store when metadata is available
-        if (storeChunks.length > 0) {
-            const firstStore = storeChunks[0];
-            setSelectedStore(firstStore);
-            const query = encodeURIComponent(firstStore.maps.title);
-            setMapQuery(`https://www.google.com/maps/embed/v1/place?key=${process.env.API_KEY}&q=${query}`);
+        // When filtered stores change (due to new metadata or filter change), update the map
+        if (filteredStores.length > 0) {
+            handleStoreClick(filteredStores[0]);
         } else {
-            // Clear map if no stores
+            // No stores in this category, clear map and selection
             setMapQuery('');
             setSelectedStore(null);
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [groundingMetadata]); 
-
-    const handleStoreClick = (store: any) => {
-        setSelectedStore(store);
-        const query = encodeURIComponent(store.maps.title);
-        setMapQuery(`https://www.google.com/maps/embed/v1/place?key=${process.env.API_KEY}&q=${query}`);
-    };
+    }, [filteredStores]); // depends on filteredStores which re-computes from filter/metadata
 
     const handleSubmitEdit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -124,7 +146,23 @@ const Sidebar: React.FC<SidebarProps> = ({
                 {/* Local Stores */}
                 {storeChunks.length > 0 && (
                     <div>
-                        <h3 className="font-semibold text-lg mb-4 text-white">Shop The Look Nearby</h3>
+                        <h3 className="font-semibold text-lg mb-2 text-white">Shop The Look Nearby</h3>
+                        
+                        <div className="flex flex-wrap gap-2 mb-4">
+                            {availableCategories.map(category => (
+                                <button
+                                    key={category}
+                                    onClick={() => setActiveFilter(category)}
+                                    className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${
+                                        activeFilter === category
+                                            ? 'bg-brand-accent text-brand-dark'
+                                            : 'bg-brand-dark hover:bg-white/10 text-brand-text-secondary'
+                                    }`}
+                                >
+                                    {category}
+                                </button>
+                            ))}
+                        </div>
                         
                         {mapQuery && (
                             <div className="aspect-w-16 aspect-h-9 w-full rounded-md overflow-hidden border border-white/10 mb-4">
@@ -142,7 +180,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         )}
                         
                         <ul className="space-y-2">
-                            {storeChunks.map((chunk: any, index: number) => (
+                            {filteredStores.map((chunk: any, index: number) => (
                                 <li key={index}>
                                     <button
                                         onClick={() => handleStoreClick(chunk)}
