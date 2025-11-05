@@ -1,0 +1,8 @@
+{
+  "name": "AI Interior Designer",
+  "description": "Upload a photo of your room and get a new, elegant, and affordable design concept with product suggestions from local stores.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "prompt": ""
+}
